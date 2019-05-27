@@ -1,0 +1,8 @@
+github.com/leenzhu/goutils v0.0.0-20190525070105-4e6b76a04368 h1:3tccmDbIHXHLizKCtLGPlwpR2LafNrUt9k1SLuWg/Go=
+github.com/leenzhu/goutils v0.0.0-20190525070105-4e6b76a04368/go.mod h1:bb2WFTerpxbW6Y0imiPdU9wE+nJ0RKxddZkVOprOPn8=
+github.com/leenzhu/goutils v0.0.0-20190525070442-3ed691289b3d h1:GyaLJ5GEbEK8sdBlAC5I2WU1vqSfjZ5YE10QMF1tjPo=
+github.com/leenzhu/goutils v0.0.0-20190525070442-3ed691289b3d/go.mod h1:bb2WFTerpxbW6Y0imiPdU9wE+nJ0RKxddZkVOprOPn8=
+github.com/leenzhu/goxlog v0.0.0-20190525071033-1e7177105685 h1:kDilOAi45ACZWWsScOsCCLHqkdLsBHTVI9Ig408euWE=
+github.com/leenzhu/goxlog v0.0.0-20190525071033-1e7177105685/go.mod h1:SrUGXNsvKziHh1VSuAj6n7Ez1qjs7UgcbSHiq+j3AhU=
+github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd h1:CmH9+J6ZSsIjUK3dcGsnCnO41eRBOnY12zwkn5qVwgc=
+github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd/go.mod h1:hPqNNc0+uJM6H+SuU8sEs5K5IQeKccPqeSjfgcKGgPk=
