@@ -1,76 +1,66 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"github.com/rwcarlsen/goexif/exif"
-	"github.com/rwcarlsen/goexif/mknote"
-	"github.com/leenzhu/goxlog"
-	"strings"
-	"fmt"
 	"flag"
+	"github.com/leenzhu/goxlog"
+	"os"
+	"bufio"
+	"path/filepath"
+	"strings"
+	"io"
+	"crypto/md5"
+	"fmt"
+	"github.com/rwcarlsen/goexif/exif"
+	"errors"
+	//"github.com/rwcarlsen/goexif/mknote"
 )
 
-var (
-	dst string
-	src string
-)
+type optContex struct {
+	mode string
+	outputDir string
+	inputDir string
+	md5File string
+	pathMd5 map[string]string
+	md5Path map[string]string
+}
 func main() {
-	// Optionally register camera makenote data parsing - currently Nikon and
-	// Canon are supported.
-	flag.StringVar(&dst, "d", "dst", "dest dir")
-	flag.StringVar(&src, "s", "src", "source dir")
+	var ctx optContex
+	flag.StringVar(&ctx.outputDir, "o", "", "output directory")
+	flag.StringVar(&ctx.inputDir, "i", "", "input directory")
+	flag.StringVar(&ctx.md5File, "m", "", "md5 file of output directory")
+	flag.StringVar(&ctx.mode, "M", "check", "work mode: check|sync")
 	flag.Parse()
 
-	exif.RegisterParsers(mknote.All...)
+	if !validOption(ctx) {
+		return
+	}
 
-
-	filepath.Walk(src, func(path string, f os.FileInfo, err error) error{
-		if err != nil {
-			xlog.Errorf("%s error with %v\n", err)
-			return nil
-		}
-		if f.IsDir() {
-			xlog.Infof("skip directory %s", path)
-			return nil
-		}
-
-
-		fullName := f.Name()
-		ext := filepath.Ext(fullName)
-		name := strings.TrimSuffix(fullName, ext)
-		xlog.Debugf("processing %s, name=%s %s\n", path, name, ext);
-		dt, err := getExif(path)
-		if err != nil {
-			return nil
-		}
-
-		var dstFile string
-		for idx := 1;;idx++ {
-			dstFile = filepath.Join(dst, dt, fullName)
-			if !exists(dstFile) {
-				break
-			}
-
-			fullName = fmt.Sprintf("%s_%d%s", name, idx, ext)
-			xlog.Debugf("warning: %s conflict, new name:%s\n", dst, fullName)
-		}
-		
-		xlog.Infof("move file %s -> %s\n", path, dstFile)
-		err = os.Rename(path, dstFile)
-		if err != nil {
-			xlog.Errorf("move file failed:%v\n", err)
-		}
-		return nil
-	})
+	switch ctx.mode {
+	case "check":
+		fileCheck(ctx)
+	case "sync":
+		fileCheck(ctx)
+		fileSync(ctx)
+	default:
+	}
 
 }
 
-func exists(path string) bool{
-	_, err := os.Stat(path)
-	if err == nil { return true}
-	if os.IsNotExist(err) { return false}
-	return true
+func finishMd5File(file *os.File, w *bufio.Writer, path string) {
+	w.Flush()
+	file.Close()
+	os.Rename(path+".tmp", path)
+}
+
+func openMd5File(path string) (*os.File, *bufio.Writer, error) {
+	file, err := os.Create(path+".tmp")
+	if err != nil {
+		xlog.Errorf("open %s failed:%v\n", path, err)
+		return nil, nil, err
+	}
+	w := bufio.NewWriter(file)
+
+	return file, w, nil
 }
 
 func getExif(path string) (string, error) {
@@ -97,3 +87,238 @@ func getExif(path string) (string, error) {
 	xlog.Debugf("OriginalDate: %s %s\n", dt, path)
 	return dt, nil
 }
+
+func getOutput(path, dst string) string {
+	var dstFile string
+	dt, err := getExif(path)
+	if err != nil {
+		return ""
+	}
+
+	fullName := filepath.Base(path)
+	ext := filepath.Ext(fullName)
+	name := strings.TrimSuffix(fullName, ext)
+
+	for idx := 1;;idx++ {
+		dstFile = filepath.Join(dst, dt, fullName)
+		if !exists(dstFile) {
+			break
+		}
+
+		fullName = fmt.Sprintf("%s_%d%s", name, idx, ext)
+		xlog.Debugf("warning: %s conflict, new name:%s\n", dst, fullName)
+	}
+
+	return dstFile
+}
+
+func moveToDate(path, dest string) error{
+	dst := getOutput(path, dest)
+	if dst == "" {
+		xlog.Errorf("get dest name failed\n")
+		return errors.New("get dest name failed\n")
+	}
+	err := os.Rename(path, dst)
+	if err != nil {
+		xlog.Errorf("move file failed:%v\n", err)
+		return err
+	}
+	return nil
+}
+
+func fileSync(ctx optContex) {
+	filepath.Walk(ctx.inputDir, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			xlog.Errorf("%s error with %v\n", err)
+			return nil
+		}
+		if f.IsDir() {
+			return nil
+		}
+
+		xlog.Debugf("SYNC %s\n", path);
+
+		md5sum := md5Sum(path)
+
+		if oldPath, ok := ctx.md5Path[md5sum]; ok {
+			xlog.Infof("DUP %s|%s\n", oldPath, path)
+		} else {
+			if err := moveToDate(path, ctx.outputDir); err != nil {
+				xlog.Errorf("Sync %s failed:%v\n", path, err)
+			} else {
+				xlog.Errorf("SYNC %s OK\n", path)
+			}
+		}
+		return nil
+	})
+}
+
+func fileCheck(ctx optContex) {
+	// step 1. load md5.sum records
+	xlog.Debugf("STEP 1 load md5.sum\n")
+	ctx.pathMd5 = loadPathMd5(ctx.md5File)
+
+	// step 2. remove all deleted files records
+	xlog.Debugf("STEP 2 DEL records of non-exists files\n")
+	for path, _ := range ctx.pathMd5 {
+		if !exists(path) {
+			xlog.Infof("DEL %s\n", path)
+			delete(ctx.pathMd5, path)
+		}
+	}
+
+	// step 3. build md5Path for unique file check
+	xlog.Debugf("STEP 3 build revers md5 Map\n")
+	ctx.md5Path = reversMap(ctx.pathMd5)
+
+	// step 4. open temp md5sum file
+	xlog.Debugf("STEP 4 open md5 file for writing\n")
+	file, w, err := openMd5File(ctx.md5File)
+	if err != nil {
+		return
+	}
+
+	// step 5. traval directory process each file
+	xlog.Debugf("STEP 5 process each file\n")
+	filepath.Walk(ctx.outputDir, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			xlog.Errorf("%s error with %v\n", err)
+			return nil
+		}
+		if f.IsDir() {
+			return nil
+		}
+
+		xlog.Debugf("Processing %s\n", path)
+
+		if oldMd5sum, ok := ctx.pathMd5[path]; !ok { // this is a new file(path)
+			md5sum := md5Sum(path)
+			xlog.Debugf("md5sum new file %s\n", path)
+
+			// if this file has the same md5 with another, ignore this file
+			if oldPath, ok := ctx.md5Path[md5sum]; ok {
+				xlog.Infof("DUP %s|%s\n", oldPath, path)
+			} else {
+				xlog.Infof("NEW %s\n", path)
+				ctx.md5Path[md5sum] = path
+				ctx.pathMd5[path] = md5sum
+
+				w.WriteString(fmt.Sprintf("%s|%s\n", md5sum, path))
+			}
+		} else {
+			xlog.Debugf("SKIP %s\n", path)
+			w.WriteString(fmt.Sprintf("%s|%s\n", oldMd5sum, path))
+		}
+
+		return nil
+	})
+
+	// step 6. Finish processing
+	xlog.Debugf("STEP 6 Finish processing\n")
+	finishMd5File(file, w, ctx.md5File)
+	xlog.Debugf("check done!\n")
+}
+
+func exists(path string) bool{
+	_, err := os.Stat(path)
+	if err == nil { return true}
+	if os.IsNotExist(err) { return false}
+	return true
+}
+
+func md5Sum(path string) string{
+	f, err := os.Open(path)
+	if err != nil {
+		xlog.Errorf("%v\n", err)
+		return ""
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		xlog.Errorf("%v\n", err)
+		return ""
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func reversMap(ori map[string]string) map[string]string {
+	newMap :=make(map[string]string)
+	
+	for k, v := range ori {
+		newMap[v] = k
+	}
+
+	return newMap
+}
+
+func loadPathMd5(path string) map[string]string{
+	pathMd5 := loadMd5File(path)
+	pathMd5Tmp := loadMd5File(path+".tmp")
+
+	for k, v := range pathMd5Tmp {
+		pathMd5[k] = v;
+	}
+
+	return pathMd5
+}
+// format: xxxxxxxx|/path/to/file
+func loadMd5File(path string) map[string]string {
+	pathMd5 := make(map[string]string)
+
+	file, err := os.Open(path)
+	if err != nil {
+		xlog.Warnf("open md5 file failed: %s\n", err)
+		return pathMd5
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+
+	lineno := 1
+	for scanner.Scan() {
+		line := scanner.Text()
+		tokens := strings.Split(line, "|")
+		if len(tokens) == 2 {
+			md5 := tokens[0]
+			path := tokens[1]
+			pathMd5[path] = md5
+		} else {
+			xlog.Debugf("invalid line(%d) in %s\n", lineno, path)
+		}
+		lineno = lineno + 1
+	}
+
+	return pathMd5
+}
+
+func validOption(ctx optContex) bool {
+	if !hasFlag(ctx.outputDir) {
+		xlog.Errorf("ouput option must be provided\n")
+		return false
+	}
+
+	if !hasFlag(ctx.inputDir) {
+		xlog.Errorf("input option must be provided\n")
+		return false
+	}
+
+	if !hasFlag(ctx.md5File) {
+		xlog.Errorf("md5 option must be provided\n")
+		return false
+	}
+
+	return true
+}
+
+func hasFlag(f string) bool {
+	if f == "" {
+		return false
+	}
+
+	return true
+}
+
+
