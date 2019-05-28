@@ -28,7 +28,7 @@ func main() {
 	var ctx optContex
 	flag.StringVar(&ctx.outputDir, "o", "", "output directory")
 	flag.StringVar(&ctx.inputDir, "i", "", "input directory")
-	flag.StringVar(&ctx.dupDir, "d", "", "input directory")
+	flag.StringVar(&ctx.dupDir, "d", "", "duplicated files directory")
 	flag.StringVar(&ctx.md5File, "m", "", "md5 file of output directory")
 	flag.StringVar(&ctx.mode, "M", "check", "work mode: check|sync")
 	flag.Parse()
